@@ -152,15 +152,91 @@ if not df.empty:
 st.divider()
 
 # -----------------------------------------------------------------------------
-# Customer Insights Section
+# Customer Insights & Retention Prioritization Section
 # -----------------------------------------------------------------------------
-st.header("Customer Insights")
-st.write("Prioritized Customer Action List (Sorted by Priority Score):")
+st.header("Retention Prioritization View")
+st.write("Filter and download prioritized customer lists for targeted marketing and retention campaigns.")
 
 if not df.empty:
-    # Display the interactive dataframe
+    st.subheader("1. Filter Customers")
+    
+    # Create layout columns for the filters
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
+    
+    with filter_col1:
+        # Segment filter
+        all_segments = df['customer_segment'].unique().tolist()
+        selected_segments = st.multiselect(
+            "Select Customer Segments", 
+            options=all_segments, 
+            default=all_segments
+        )
+        
+    with filter_col2:
+        # Minimum CLV filter
+        min_clv = st.slider(
+            "Minimum CLV Score", 
+            min_value=0.0, max_value=1.0, value=0.0, step=0.05
+        )
+        
+    with filter_col3:
+        # Minimum Churn filter
+        min_churn = st.slider(
+            "Minimum Churn Risk", 
+            min_value=0.0, max_value=1.0, value=0.0, step=0.05
+        )
+
+    # Apply the filters to the dataframe
+    filtered_df = df[
+        (df['customer_segment'].isin(selected_segments)) & 
+        (df['clv_score'] >= min_clv) & 
+        (df['churn_probability'] >= min_churn)
+    ]
+    
+    # Define the core columns to display
+    display_cols = [
+        'customerID', 'churn_probability', 'clv_score', 
+        'customer_segment', 'recommended_action', 'priority_score'
+    ]
+    
+    # Ensure it's sorted by priority (Highest risk + value first)
+    if 'priority_score' in filtered_df.columns:
+        filtered_df = filtered_df.sort_values(by='priority_score', ascending=False)
+        
+    st.divider()
+    
+    # Display Top 10 Actionable Targets
+    st.subheader("🔥 Top 10 Retention Targets")
+    st.caption("The 10 single most important customers to contact right now based on your filters.")
     st.dataframe(
-        df,
+        filtered_df[display_cols].head(10),
         use_container_width=True,
         hide_index=True
+    )
+
+    st.write("<br>", unsafe_allow_html=True)
+
+    # Display the full filtered list
+    st.subheader("📋 Full Filtered Customer List")
+    st.write(f"Showing **{len(filtered_df):,}** customers matching your criteria.")
+    st.dataframe(
+        filtered_df[display_cols],
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    st.write("<br>", unsafe_allow_html=True)
+    
+    # -----------------------------------------------------------------------------
+    # CSV Download Button
+    # -----------------------------------------------------------------------------
+    # Convert filtered DataFrame to CSV format for download
+    csv_data = filtered_df[display_cols].to_csv(index=False).encode('utf-8')
+    
+    st.download_button(
+        label="📥 Download List as CSV for CRM",
+        data=csv_data,
+        file_name="prioritized_customer_targets.csv",
+        mime="text/csv",
+        help="Download this list to import directly into Salesforce, HubSpot, or your email marketing tool."
     )
