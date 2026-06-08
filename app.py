@@ -22,9 +22,28 @@ def run_end_to_end_pipeline(raw_df):
     """
     Executes the entire data science pipeline on a newly uploaded raw dataset.
     """
+    # Standardize column names (strip whitespace and handle casing)
+    df_processed = raw_df.copy()
+    df_processed.columns = [str(c).strip() for c in df_processed.columns]
+    
+    # Map common variations of required columns case-insensitively
+    column_mapping = {}
+    for col in df_processed.columns:
+        col_lower = col.lower()
+        if col_lower in ['customerid', 'customer_id', 'customer id']:
+            column_mapping[col] = 'customerID'
+        elif col_lower in ['tenure', 'tenure_months', 'tenure months']:
+            column_mapping[col] = 'tenure'
+        elif col_lower in ['monthlycharges', 'monthly charges', 'monthly_charges']:
+            column_mapping[col] = 'MonthlyCharges'
+        elif col_lower in ['totalcharges', 'total charges', 'total_charges']:
+            column_mapping[col] = 'TotalCharges'
+            
+    df_processed = df_processed.rename(columns=column_mapping)
+    
     # 2 & 5. Validate dataset
     required_cols = ['customerID', 'tenure', 'MonthlyCharges', 'TotalCharges']
-    missing_cols = [c for c in required_cols if c not in raw_df.columns]
+    missing_cols = [c for c in required_cols if c not in df_processed.columns]
     
     if missing_cols:
         st.error(f"❌ Invalid CSV. The following required columns are missing: {missing_cols}")
@@ -33,7 +52,7 @@ def run_end_to_end_pipeline(raw_df):
     with st.status("Running Data Science Pipeline...", expanded=True) as status:
         # Step 1: Preprocessing & Cleaning (Phase 2)
         st.write("⚙️ 1. Cleaning and preprocessing data...")
-        df_clean = raw_df.copy()
+        df_clean = df_processed.copy()
         df_clean['TotalCharges'] = pd.to_numeric(df_clean['TotalCharges'], errors='coerce').fillna(0)
         time.sleep(0.5) # Simulated process time
         
@@ -108,11 +127,16 @@ st.sidebar.info("Use this dashboard to monitor churn risk, Customer Lifetime Val
 
 # 3 & 4. Execute Workflow based on upload
 if uploaded_file is not None:
-    # Read the uploaded file
-    raw_csv = pd.read_csv(uploaded_file)
-    st.sidebar.success("File uploaded successfully!")
-    # Run the modularized pipeline on the new data
-    df = run_end_to_end_pipeline(raw_csv)
+    try:
+        # Read the uploaded file
+        raw_csv = pd.read_csv(uploaded_file)
+        st.sidebar.success("File uploaded successfully!")
+        
+        # Run the modularized pipeline on the new data
+        df = run_end_to_end_pipeline(raw_csv)
+    except Exception as e:
+        st.sidebar.error(f"❌ Error parsing CSV file: {str(e)}")
+        df = pd.DataFrame()
 else:
     # Fallback to the default saved Phase 6 data
     df = load_default_data()
