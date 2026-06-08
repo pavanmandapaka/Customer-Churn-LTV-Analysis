@@ -105,7 +105,14 @@ def run_end_to_end_pipeline(raw_df):
 @st.cache_data
 def load_default_data():
     try:
-        return pd.read_csv('final_customer_action_list.csv')
+        action_df = pd.read_csv('final_customer_action_list.csv')
+        try:
+            features_df = pd.read_csv('telco_customer_churn_cleaned.csv')
+            # Merge to ensure individual customer feature details are accessible
+            merged_df = pd.merge(action_df, features_df, on='customerID', how='left')
+            return merged_df
+        except Exception:
+            return action_df
     except FileNotFoundError:
         return pd.DataFrame()
 
@@ -267,3 +274,185 @@ else:
         st.warning("⚠️ No data loaded. Please upload a dataset in the sidebar or ensure the default CSV exists.")
     else:
         st.error("❌ Pipeline execution failed or invalid dataset was uploaded. Please verify the CSV format and column requirements listed in the status message above.")
+
+# -----------------------------------------------------------------------------
+# GLOBAL MODEL EXPLAINABILITY & CUSTOMER DRILL-DOWN SUITE (PHASE 8 - PART 5)
+# -----------------------------------------------------------------------------
+if not df.empty:
+    st.divider()
+    st.header("🎯 Global Model Explainability")
+    st.subheader("Top Drivers of Churn")
+    st.write(
+        "This section highlights the top features influencing the baseline churn model. "
+        "Positive coefficients increase churn probability, while negative coefficients are protective features."
+    )
+
+    # Hardcoded feature importances/coefficients from the notebook baseline
+    global_importance_data = {
+        "Feature Name": [
+            "internet_Fiber optic",
+            "contract_ordinal (Month-to-month)",
+            "phoneservice_flag",
+            "tenure_bin_ordinal",
+            "onlinesecurity_Yes",
+            "paperlessbilling_flag",
+            "multiplelines_Yes",
+            "is_trial_period",
+            "streamingmovies_Yes",
+            "techsupport_Yes"
+        ],
+        "Importance Score": [0.8529, -0.7180, -0.5421, 0.4738, -0.4156, 0.4122, 0.3820, 0.3044, 0.2978, -0.2881],
+        "Type": [
+            "Increases Churn",
+            "Protective (Reduces Churn)",
+            "Protective (Reduces Churn)",
+            "Increases Churn",
+            "Protective (Reduces Churn)",
+            "Increases Churn",
+            "Increases Churn",
+            "Increases Churn",
+            "Increases Churn",
+            "Protective (Reduces Churn)"
+        ]
+    }
+    importance_df = pd.DataFrame(global_importance_data)
+    importance_df["Absolute Importance"] = importance_df["Importance Score"].abs()
+    importance_df = importance_df.sort_values(by="Absolute Importance", ascending=False)
+
+    col_exp1, col_exp2 = st.columns([3, 2])
+
+    with col_exp1:
+        fig_importance = px.bar(
+            importance_df,
+            x="Importance Score",
+            y="Feature Name",
+            color="Type",
+            orientation="h",
+            title="Feature Coefficients (Baseline Logistic Regression)",
+            color_discrete_map={"Increases Churn": "#EF553B", "Protective (Reduces Churn)": "#00CC96"}
+        )
+        st.plotly_chart(fig_importance, width="stretch")
+
+    with col_exp2:
+        st.write("**Feature Impact Table**")
+        st.dataframe(
+            importance_df[["Feature Name", "Importance Score", "Type"]],
+            width="stretch",
+            hide_index=True
+        )
+
+    st.write("### 💡 Business Interpretation")
+    st.markdown(
+        """
+        * **Contract Type (Month-to-month)**: Month-to-month contracts lack long-term commitment. These customers are much more likely to leave compared to those on 1-year or 2-year terms.
+        * **Fiber Optic Internet**: Fiber Optic customers have high churn risk, potentially driven by higher price points or technical support expectations.
+        * **Tenure**: Newer customers (low tenure lifecycles) exhibit much higher churn rates compared to long-standing customers.
+        * **Online Security & Tech Support**: Subscribing to these premium add-on services serves as a strong 'protective' anchor, heavily reducing the likelihood of a customer leaving.
+        """
+    )
+
+    # Customer Search & Individual Drill-Down Section
+    st.divider()
+    st.header("🔍 Customer Drill-Down & Explainability")
+    st.write("Search for an individual customer to inspect their risk score, understand prediction drivers, and review recommendations.")
+
+    # Populate select box with available Customer IDs
+    customer_list = df['customerID'].dropna().unique().tolist()
+    selected_customer_id = st.selectbox("Search / Select by CustomerID", options=customer_list)
+
+    if selected_customer_id:
+        cust_row = df[df['customerID'] == selected_customer_id].iloc[0]
+
+        # Display Customer Details Summary Cards
+        col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+        with col_c1:
+            st.metric(label="CustomerID", value=str(cust_row['customerID']))
+            st.metric(label="Priority Score", value=f"{cust_row.get('priority_score', 0.0):.2f}")
+        with col_c2:
+            st.metric(label="Churn Probability", value=f"{cust_row.get('churn_probability', 0.0):.1%}")
+            st.metric(label="Segment", value=str(cust_row.get('customer_segment', 'N/A')))
+        with col_c3:
+            st.metric(label="CLV Score", value=f"{cust_row.get('clv_score', 0.0):.2f}")
+            st.metric(label="Recommended Action", value=str(cust_row.get('recommended_action', 'N/A')))
+        with col_c4:
+            # Check contract type if present in features
+            contract_mapping = {0: "Month-to-month", 1: "One year", 2: "Two year"}
+            contract_raw = cust_row.get('contract_ordinal', 'N/A')
+            contract_type = contract_mapping.get(contract_raw, "N/A") if contract_raw != 'N/A' else "N/A"
+            st.metric(label="Contract Type", value=contract_type)
+            st.metric(label="Tenure (Months)", value=f"{int(cust_row.get('tenure', 0))} months")
+
+        # Local Explanation Generator (Rule-based Fallback)
+        st.write("### 🤖 Prediction Rationale (Why this prediction?)")
+        pos_drivers = []
+        neg_drivers = []
+
+        # Rule evaluation on customer details
+        if cust_row.get('contract_ordinal', 0) == 0:
+            pos_drivers.append("⚠️ **Month-to-month Contract**: High volatility and low commitment.")
+        elif cust_row.get('contract_ordinal', 0) == 2:
+            neg_drivers.append("✅ **Two-year Contract**: Highly stable, long-term commitment.")
+        
+        if cust_row.get('tenure', 0) <= 12:
+            pos_drivers.append(f"⚠️ **New Customer Lifecycle**: Early lifecycle customer ({int(cust_row.get('tenure', 0))} months) is prone to early churn.")
+        elif cust_row.get('tenure', 0) >= 48:
+            neg_drivers.append(f"✅ **High Tenure Customer**: Long standing lifecycle ({int(cust_row.get('tenure', 0))} months) reduces volatility.")
+
+        if cust_row.get('internet_Fiber optic', 0) == 1:
+            pos_drivers.append("⚠️ **Fiber Optic Service**: Premium plan with higher price-points.")
+        
+        if cust_row.get('onlinesecurity_Yes', 0) == 1:
+            neg_drivers.append("✅ **Online Security Enabled**: High-stickiness value-added product.")
+        
+        if cust_row.get('techsupport_Yes', 0) == 1:
+            neg_drivers.append("✅ **Tech Support Utilized**: Engaged customer using support avenues.")
+
+        if cust_row.get('MonthlyCharges', 0.0) >= 80.0:
+            pos_drivers.append(f"⚠️ **High Monthly Cost**: Monthly bill is high (${cust_row.get('MonthlyCharges', 0.0):.2f}).")
+        elif cust_row.get('MonthlyCharges', 0.0) <= 30.0:
+            neg_drivers.append(f"✅ **Budget Friendly Plan**: Low financial risk path (${cust_row.get('MonthlyCharges', 0.0):.2f}).")
+
+        col_pos, col_neg = st.columns(2)
+        with col_pos:
+            st.markdown("🔴 **Positive Churn Drivers (Risk Indicators)**")
+            if pos_drivers:
+                for d in pos_drivers:
+                    st.write(d)
+            else:
+                st.write("None detected.")
+
+        with col_neg:
+            st.markdown("🟢 **Negative Churn Drivers (Protective Factors)**")
+            if neg_drivers:
+                for d in neg_drivers:
+                    st.write(d)
+            else:
+                st.write("None detected.")
+
+        # Business Recommendation Card
+        st.write("### 💼 Business Action Card")
+        
+        rec_action = cust_row.get('recommended_action', 'Standard Nurture')
+        rec_segment = cust_row.get('customer_segment', 'General Monitoring')
+        rec_churn = cust_row.get('churn_probability', 0.0)
+        rec_clv = cust_row.get('clv_score', 0.0)
+
+        # Dynamic strategy copy
+        if rec_segment == 'Retention Target':
+            rec_reason = f"High Churn Risk ({rec_churn:.1%}) combined with High Value (CLV score of {rec_clv:.2f}). A proactive save strategy is critical."
+            rec_impact = "Potential retention of high-value revenue, keeping a profitable customer on the books."
+        elif rec_segment == 'Loyalty/Upsell Target':
+            rec_reason = f"Highly loyal customer (Low Risk: {rec_churn:.1%}) with high tenure. Primed for contract extension or cross-selling."
+            rec_impact = "Increases ARPU (Average Revenue Per User) and increases long term advocacy."
+        elif rec_segment == 'Non-Target':
+            rec_reason = f"High Churn Risk ({rec_churn:.1%}) but Low CLV Value (CLV score of {rec_clv:.2f}). Avoid expensive promotions; monitor passively."
+            rec_impact = "Avoids margin-diluting discount costs on low-value accounts."
+        else:
+            rec_reason = "Customer is in a stable general monitoring state with balanced risk and value metrics."
+            rec_impact = "Maintains standard marketing communication path."
+
+        st.info(
+            f"**Recommended Action**: **{rec_action}**\n\n"
+            f"**Rationale**: {rec_reason}\n\n"
+            f"**Expected Business Impact**: {rec_impact}"
+        )
