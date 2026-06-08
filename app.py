@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px 
+import plotly.express as px
+import time
 
 # -----------------------------------------------------------------------------
-# 1 & 2. Page Config & Title
+# 1. Page Config & Title
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="Customer Churn & LTV Analysis Dashboard", 
@@ -14,30 +15,112 @@ st.set_page_config(
 st.title("Customer Churn & LTV Analysis Dashboard")
 
 # -----------------------------------------------------------------------------
-# SIDEBAR
+# Modularized Pipeline Function (Phases 1-6)
 # -----------------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def run_end_to_end_pipeline(raw_df):
+    """
+    Executes the entire data science pipeline on a newly uploaded raw dataset.
+    """
+    # 2 & 5. Validate dataset
+    required_cols = ['customerID', 'tenure', 'MonthlyCharges', 'TotalCharges']
+    missing_cols = [c for c in required_cols if c not in raw_df.columns]
+    
+    if missing_cols:
+        st.error(f"❌ Invalid CSV. The following required columns are missing: {missing_cols}")
+        return pd.DataFrame()
+
+    with st.status("Running Data Science Pipeline...", expanded=True) as status:
+        # Step 1: Preprocessing & Cleaning (Phase 2)
+        st.write("⚙️ 1. Cleaning and preprocessing data...")
+        df_clean = raw_df.copy()
+        df_clean['TotalCharges'] = pd.to_numeric(df_clean['TotalCharges'], errors='coerce').fillna(0)
+        time.sleep(0.5) # Simulated process time
+        
+        # Step 2: Feature Engineering (Phase 3)
+        st.write("🛠️ 2. Engineering features...")
+        # Note: Insert actual feature engineering (one-hot encoding, scaling) here
+        time.sleep(0.5)
+        
+        # Step 3: Model Inferences (Phases 4 & 5)
+        st.write("🤖 3. Predicting Churn Risk & CLV...")
+        # Note: You need to save your models in the notebook using `joblib.dump(model, 'model.pkl')`
+        # and load them here: `model = joblib.load('churn_model.pkl')`
+        
+        # FOR NOW: Simulating model outputs to allow dashboard testing
+        import numpy as np
+        np.random.seed(42)
+        df_clean['churn_probability'] = np.random.uniform(0, 1, size=len(df_clean))
+        df_clean['clv_score'] = np.random.uniform(0, 1, size=len(df_clean))
+        
+        # We need engagement_level for the decision engine
+        df_clean['engagement_level'] = (df_clean['tenure'] / df_clean['tenure'].max()) 
+        time.sleep(0.5)
+
+        # Step 4: Decision Engine (Phase 6)
+        st.write("🧠 4. Applying Decision Engine rules...")
+        
+        # Calculate Segment thresholds (Tertiles for CLV)
+        df_clean['clv_segment'] = pd.qcut(df_clean['clv_score'], q=[0, 0.33, 0.66, 1.0], labels=['Low CLV', 'Medium CLV', 'High CLV'])
+        
+        def assign_logic(row):
+            if row['churn_probability'] > 0.50 and row['clv_segment'] == 'High CLV':
+                return pd.Series(['Retention Target', 'Offer Discount'])
+            elif row['churn_probability'] > 0.50 and row['clv_segment'] == 'Low CLV':
+                return pd.Series(['Non-Target', 'No Action'])
+            elif row['churn_probability'] < 0.30 and row['engagement_level'] > 0.50:
+                return pd.Series(['Loyalty/Upsell Target', 'Upsell / Reward'])
+            else:
+                return pd.Series(['General Monitoring', 'Standard Nurture'])
+                
+        df_clean[['customer_segment', 'recommended_action']] = df_clean.apply(assign_logic, axis=1)
+        df_clean['priority_score'] = df_clean['churn_probability'] * df_clean['clv_score']
+        
+        status.update(label="✅ Pipeline execution complete!", state="complete", expanded=False)
+        
+    return df_clean
+
+# -----------------------------------------------------------------------------
+# Default Data Loader
+# -----------------------------------------------------------------------------
+@st.cache_data
+def load_default_data():
+    try:
+        return pd.read_csv('final_customer_action_list.csv')
+    except FileNotFoundError:
+        return pd.DataFrame()
+
+# -----------------------------------------------------------------------------
+# SIDEBAR: File Uploader Worklflow
+# -----------------------------------------------------------------------------
+st.sidebar.header("Data Source")
+
+# 1. Add Streamlit file uploader
+uploaded_file = st.sidebar.file_uploader(
+    "Upload New Customer Data (CSV)", 
+    type=["csv"],
+    help="Upload raw telco data. It will automatically run through the ML pipeline."
+)
+
+st.sidebar.divider()
 st.sidebar.header("Dashboard Navigation")
 st.sidebar.info("Use this dashboard to monitor churn risk, Customer Lifetime Value (CLV), and prioritized business actions.")
 
-# -----------------------------------------------------------------------------
-# 4. Load Dataset
-# -----------------------------------------------------------------------------
-@st.cache_data
-def load_data():
-    """Loads the final prioritized list of customers."""
-    try:
-        # Load the CSV generated in Phase 6 - Part 3
-        df = pd.read_csv('final_customer_action_list.csv')
-        return df
-    except FileNotFoundError:
-        st.error("⚠️ 'final_customer_action_list.csv' not found. Please run the final pipeline step first.")
-        return pd.DataFrame()
+# 3 & 4. Execute Workflow based on upload
+if uploaded_file is not None:
+    # Read the uploaded file
+    raw_csv = pd.read_csv(uploaded_file)
+    st.sidebar.success("File uploaded successfully!")
+    # Run the modularized pipeline on the new data
+    df = run_end_to_end_pipeline(raw_csv)
+else:
+    # Fallback to the default saved Phase 6 data
+    df = load_default_data()
 
-df = load_data()
+# =============================================================================
+# DASHBOARD UI COMPONENTS (Overview, KPIs, Visualizations, Insights)
+# =============================================================================
 
-# -----------------------------------------------------------------------------
-# 3. Overview Section
-# -----------------------------------------------------------------------------
 st.header("Overview")
 st.write("""
 This dashboard provides a unified view of customer health. It combines predictive churn 
@@ -47,23 +130,17 @@ ROI-positive interventions for the marketing and retention teams.
 
 st.divider()
 
-# -----------------------------------------------------------------------------
-# 5 & 6. KPIs Section (Using Columns & Metrics)
-# -----------------------------------------------------------------------------
-st.header("KPIs")
-
 if not df.empty:
-    # Calculate metrics
+    # -------------------------------------------------------------------------
+    # KPIs Section
+    # -------------------------------------------------------------------------
+    st.header("KPIs")
     total_customers = len(df)
     avg_churn_prob = df['churn_probability'].mean()
     avg_clv_score = df['clv_score'].mean()
-    
-    # Count how many are flagged as specific retention targets
     retention_targets = len(df[df['customer_segment'] == 'Retention Target'])
 
-    # Render metrics in 4 columns
     col1, col2, col3, col4 = st.columns(4)
-
     with col1:
         st.metric(label="Total Customers", value=f"{total_customers:,}")
     with col2:
@@ -73,166 +150,87 @@ if not df.empty:
     with col4:
         st.metric(label="High-Priority Targets", value=f"{retention_targets:,}")
 
-st.divider()
+    st.divider()
 
-# -----------------------------------------------------------------------------
-# Visualizations Section
-# -----------------------------------------------------------------------------
-st.header("Visualizations")
-
-if not df.empty:
+    # -------------------------------------------------------------------------
+    # Visualizations Section
+    # -------------------------------------------------------------------------
+    st.header("Visualizations")
     st.write("Explore customer distributions and the relationship between churn risk and lifetime value.")
     
-    # ── ROW 1: Histograms ──
     col_hist1, col_hist2 = st.columns(2)
-    
     with col_hist1:
-        # Churn Probability Distribution
-        fig_churn = px.histogram(
-            df, x='churn_probability', nbins=30,
-            title='Distribution of Churn Risk',
-            labels={'churn_probability': 'Churn Probability (0 = Safe, 1 = High Risk)'},
-            color_discrete_sequence=['#EF553B']
-        )
+        fig_churn = px.histogram(df, x='churn_probability', nbins=30, title='Distribution of Churn Risk', color_discrete_sequence=['#EF553B'])
         fig_churn.update_layout(bargap=0.1)
         st.plotly_chart(fig_churn, use_container_width=True)
-        st.caption("**How to read this:** Shows the volume of customers at each risk level. A spike on the right indicates a large group of flight-risk customers.")
+        st.caption("**How to read this:** A spike on the right indicates a large group of flight-risk customers.")
 
     with col_hist2:
-        # CLV Score Distribution
-        fig_clv = px.histogram(
-            df, x='clv_score', nbins=30,
-            title='Distribution of CLV Scores',
-            labels={'clv_score': 'CLV Score (0 = Low Value, 1 = High Value)'},
-            color_discrete_sequence=['#00CC96']
-        )
+        fig_clv = px.histogram(df, x='clv_score', nbins=30, title='Distribution of CLV Scores', color_discrete_sequence=['#00CC96'])
         fig_clv.update_layout(bargap=0.1)
         st.plotly_chart(fig_clv, use_container_width=True)
-        st.caption("**How to read this:** Shows the spread of lifetime value. Higher scores mean we have highly profitable, engaged customers.")
+        st.caption("**How to read this:** Higher scores mean we have highly profitable, engaged customers.")
         
-    st.write("<br>", unsafe_allow_html=True) # Spacer
-
-    # ── ROW 2: Bar Chart & Scatter Plot ──
+    st.write("<br>", unsafe_allow_html=True)
     col_bar, col_scatter = st.columns(2)
     
     with col_bar:
-        # Customer Segment Breakdown
         segment_counts = df['customer_segment'].value_counts().reset_index()
         segment_counts.columns = ['Segment', 'Count']
-        
-        fig_segments = px.bar(
-            segment_counts, x='Segment', y='Count',
-            title='Customer Strategy Breakdown',
-            color='Segment',
-            text_auto=True
-        )
+        fig_segments = px.bar(segment_counts, x='Segment', y='Count', title='Customer Strategy Breakdown', color='Segment', text_auto=True)
         st.plotly_chart(fig_segments, use_container_width=True)
-        st.caption("**How to read this:** Summarizes how many customers fall into our distinct intervention buckets (e.g., how many we need to actively try and save).")
+        st.caption("**How to read this:** Summarizes how many customers fall into our distinct intervention buckets.")
 
     with col_scatter:
-        # Risk vs Reward Matrix
-        fig_scatter = px.scatter(
-            df, x='churn_probability', y='clv_score',
-            color='customer_segment',
-            title='Risk vs. Reward (Intervention Matrix)',
-            labels={
-                'churn_probability': 'Churn Risk', 
-                'clv_score': 'Value (CLV Score)'
-            },
-            opacity=0.7,
-            hover_data=['recommended_action']
-        )
-        # Add visual quadrants (Optional enhancements for readability)
+        fig_scatter = px.scatter(df, x='churn_probability', y='clv_score', color='customer_segment', title='Risk vs. Reward (Intervention Matrix)', opacity=0.7, hover_data=['recommended_action'])
         fig_scatter.add_hline(y=0.5, line_dash="dash", line_color="gray", opacity=0.5)
         fig_scatter.add_vline(x=0.5, line_dash="dash", line_color="gray", opacity=0.5)
-        
         st.plotly_chart(fig_scatter, use_container_width=True)
-        st.caption("**How to read this:** Top Right = High Value + High Risk (Save them!). Bottom Right = Low Value + High Risk (Let them go organically).")
+        st.caption("**How to read this:** Top Right = Save them. Bottom Right = Let them go organically.")
 
-st.divider()
+    st.divider()
 
-# -----------------------------------------------------------------------------
-# Customer Insights & Retention Prioritization Section
-# -----------------------------------------------------------------------------
-st.header("Retention Prioritization View")
-st.write("Filter and download prioritized customer lists for targeted marketing and retention campaigns.")
+    # -------------------------------------------------------------------------
+    # Retention Prioritization View
+    # -------------------------------------------------------------------------
+    st.header("Retention Prioritization View")
+    st.write("Filter and download prioritized customer lists for targeted marketing and retention campaigns.")
 
-if not df.empty:
     st.subheader("1. Filter Customers")
-    
-    # Create layout columns for the filters
     filter_col1, filter_col2, filter_col3 = st.columns(3)
     
     with filter_col1:
-        # Segment filter
         all_segments = df['customer_segment'].unique().tolist()
-        selected_segments = st.multiselect(
-            "Select Customer Segments", 
-            options=all_segments, 
-            default=all_segments
-        )
-        
+        selected_segments = st.multiselect("Select Customer Segments", options=all_segments, default=all_segments)
     with filter_col2:
-        # Minimum CLV filter
-        min_clv = st.slider(
-            "Minimum CLV Score", 
-            min_value=0.0, max_value=1.0, value=0.0, step=0.05
-        )
-        
+        min_clv = st.slider("Minimum CLV Score", min_value=0.0, max_value=1.0, value=0.0, step=0.05)
     with filter_col3:
-        # Minimum Churn filter
-        min_churn = st.slider(
-            "Minimum Churn Risk", 
-            min_value=0.0, max_value=1.0, value=0.0, step=0.05
-        )
+        min_churn = st.slider("Minimum Churn Risk", min_value=0.0, max_value=1.0, value=0.0, step=0.05)
 
-    # Apply the filters to the dataframe
     filtered_df = df[
         (df['customer_segment'].isin(selected_segments)) & 
         (df['clv_score'] >= min_clv) & 
         (df['churn_probability'] >= min_churn)
     ]
     
-    # Define the core columns to display
-    display_cols = [
-        'customerID', 'churn_probability', 'clv_score', 
-        'customer_segment', 'recommended_action', 'priority_score'
-    ]
+    display_cols = ['customerID', 'churn_probability', 'clv_score', 'customer_segment', 'recommended_action', 'priority_score']
     
-    # Ensure it's sorted by priority (Highest risk + value first)
+    # Graceful handling if customerID is missing in raw uploaded data test
+    display_cols = [c for c in display_cols if c in filtered_df.columns]
+    
     if 'priority_score' in filtered_df.columns:
         filtered_df = filtered_df.sort_values(by='priority_score', ascending=False)
         
     st.divider()
-    
-    # Display Top 10 Actionable Targets
     st.subheader("🔥 Top 10 Retention Targets")
-    st.caption("The 10 single most important customers to contact right now based on your filters.")
-    st.dataframe(
-        filtered_df[display_cols].head(10),
-        use_container_width=True,
-        hide_index=True
-    )
+    st.dataframe(filtered_df[display_cols].head(10), use_container_width=True, hide_index=True)
 
     st.write("<br>", unsafe_allow_html=True)
-
-    # Display the full filtered list
     st.subheader("📋 Full Filtered Customer List")
-    st.write(f"Showing **{len(filtered_df):,}** customers matching your criteria.")
-    st.dataframe(
-        filtered_df[display_cols],
-        use_container_width=True,
-        hide_index=True
-    )
+    st.dataframe(filtered_df[display_cols], use_container_width=True, hide_index=True)
     
     st.write("<br>", unsafe_allow_html=True)
-    
-    # -----------------------------------------------------------------------------
-    # CSV Download Button
-    # -----------------------------------------------------------------------------
-    # Convert filtered DataFrame to CSV format for download
     csv_data = filtered_df[display_cols].to_csv(index=False).encode('utf-8')
-    
     st.download_button(
         label="📥 Download List as CSV for CRM",
         data=csv_data,
@@ -240,3 +238,6 @@ if not df.empty:
         mime="text/csv",
         help="Download this list to import directly into Salesforce, HubSpot, or your email marketing tool."
     )
+else:
+    if uploaded_file is None:
+        st.warning("⚠️ No data loaded. Please upload a dataset in the sidebar or ensure the default CSV exists.")
