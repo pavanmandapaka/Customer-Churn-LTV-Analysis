@@ -265,3 +265,5 @@ if not df.empty:
 else:
     if uploaded_file is None:
         st.warning("⚠️ No data loaded. Please upload a dataset in the sidebar or ensure the default CSV exists.")
+    else:
+        st.error("❌ Pipeline execution failed or invalid dataset was uploaded. Please verify the CSV format and column requirements listed in the status message above.")
